@@ -123,56 +123,80 @@ export async function getRedisClient(): Promise<any> {
   }
 
   try {
-    // Dynamic Reconnection Strategy: Instead of returning false and stopping, we reconnect automatically.
-    // Exponential backoff, capping at 3 seconds, so idle socket drop heals seamlessly.
+    // Dynamic Reconnection Strategy: Automatically connect and keep retrying.
+    // Exponential backoff up to 4 seconds, avoiding permanent disable.
     const reconnectStrategy = (retries: number) => {
-      if (retries > 15) {
-        console.error("❌ Redis reconnection attempts exhausted. Disabling caching.");
-        isRedisHealthy = false;
-        isRedisDisabled = true;
-        return new Error("Redis reconnection attempts exhausted");
+      isRedisHealthy = false;
+      if (retries % 10 === 0) {
+        console.warn(`🔄 Redis background reconnecting... (Attempt ${retries})`);
       }
-      return Math.min(retries * 100, 3000);
+      return Math.min(retries * 200, 4000);
     };
 
     const options = redisUrl
       ? { 
           url: redisUrl, 
-          socket: { reconnectStrategy } 
+          socket: { reconnectStrategy, keepAlive: true } 
         }
       : {
           socket: {
             host: process.env.REDIS_HOST || "localhost",
             port: parseInt(process.env.REDIS_PORT || "6379"),
             reconnectStrategy,
+            keepAlive: true,
           },
           password: process.env.REDIS_PASSWORD || undefined,
         };
 
     redisClient = redis.createClient(options);
 
-    redisClient.on("error", (err: any) => {
-      // Gentle logs for routine idle socket terminations (Extremely common in Upstash)
-      if (err.message && err.message.includes("Socket closed unexpectedly")) {
-        console.log("ℹ️ Redis idle socket closed by remote host (expected Upstash behavior). Client will reconnect on next command.");
-        return;
-      }
-      
-      console.warn("⚠️ Redis client error:", err.message);
+    // Dynamic state management via event subscriptions
+    redisClient.on("connect", () => {
+      console.log("ℹ️ Redis socket connected, handshaking/authenticating...");
+    });
+
+    redisClient.on("ready", () => {
+      console.log("✅ Redis client is fully ready and operational.");
+      isRedisHealthy = true;
+    });
+
+    redisClient.on("reconnecting", () => {
+      isRedisHealthy = false;
+      console.log("🔄 Redis connection interrupted. Reconnecting passively in background...");
     });
 
     redisClient.on("end", () => {
-      console.log("ℹ️ Redis socket connection ended gracefully.");
+      isRedisHealthy = false;
+      console.log("ℹ️ Redis socket connection ended.");
+    });
+
+    redisClient.on("error", (err: any) => {
+      isRedisHealthy = false;
+      const isUnexpectedClose = err.message && err.message.includes("Socket closed unexpectedly");
+      
+      if (isUnexpectedClose) {
+        console.log("ℹ️ Redis idle socket closed unexpectedly (Upstash timeout). Auto-reconnecting background worker.");
+      } else {
+        console.warn("⚠️ Redis client error:", err.message);
+      }
     });
 
     await redisClient.connect();
-    console.log("✅ Redis connection established successfully.");
-    isRedisHealthy = true;
+
+    // Warm-up ping interval (Every 25 seconds) to prevent Upstash idle connection terminations (usually 60s)
+    setInterval(async () => {
+      if (redisClient && isRedisHealthy) {
+        try {
+          await redisClient.ping();
+        } catch {
+          // Handled gracefully via reconnection listener
+        }
+      }
+    }, 25000);
+
   } catch (error: any) {
-    console.error("❌ Redis Connection Error. Running without Redis caching.", error.message);
-    redisClient = null;
+    console.error("❌ Redis Initial Connection Attempt failed. Caching will auto-activate once connection heals in background. Error:", error.message);
     isRedisHealthy = false;
-    isRedisDisabled = true;
   }
 
   return redisClient;
