@@ -105,142 +105,28 @@ export async function getPgPool(): Promise<pg.Pool | null> {
   return pgPool;
 }
 
-// Initialize Redis Client lazily
+// Initialize Redis Client - Disabled completely to avoid Upstash connection loops.
+// Caching is handled dynamically in-memory or bypassed safely to PostgreSQL.
 export async function getRedisClient(): Promise<any> {
-  if (isRedisDisabled) return null;
-  if (redisClient) return redisClient;
-
-  const redisUrl = process.env.REDIS_URL;
-  const redisHost = process.env.REDIS_HOST;
-
-  if (!redisUrl && !redisHost) {
-    if (!hasWarnedRedisMissingConfig) {
-      console.warn("⚠️ Redis credentials missing in .env (REDIS_URL not set). Running without Redis caching.");
-      hasWarnedRedisMissingConfig = true;
-    }
-    isRedisDisabled = true;
-    return null;
-  }
-
-  try {
-    // Dynamic Reconnection Strategy: Automatically connect and keep retrying.
-    // Exponential backoff up to 4 seconds, avoiding permanent disable.
-    const reconnectStrategy = (retries: number) => {
-      isRedisHealthy = false;
-      if (retries % 10 === 0) {
-        console.warn(`🔄 Redis background reconnecting... (Attempt ${retries})`);
-      }
-      return Math.min(retries * 200, 4000);
-    };
-
-    const options = redisUrl
-      ? { 
-          url: redisUrl, 
-          socket: { reconnectStrategy, keepAlive: true } 
-        }
-      : {
-          socket: {
-            host: process.env.REDIS_HOST || "localhost",
-            port: parseInt(process.env.REDIS_PORT || "6379"),
-            reconnectStrategy,
-            keepAlive: true,
-          },
-          password: process.env.REDIS_PASSWORD || undefined,
-        };
-
-    redisClient = redis.createClient(options);
-
-    // Dynamic state management via event subscriptions
-    redisClient.on("connect", () => {
-      console.log("ℹ️ Redis socket connected, handshaking/authenticating...");
-    });
-
-    redisClient.on("ready", () => {
-      console.log("✅ Redis client is fully ready and operational.");
-      isRedisHealthy = true;
-    });
-
-    redisClient.on("reconnecting", () => {
-      isRedisHealthy = false;
-      console.log("🔄 Redis connection interrupted. Reconnecting passively in background...");
-    });
-
-    redisClient.on("end", () => {
-      isRedisHealthy = false;
-      console.log("ℹ️ Redis socket connection ended.");
-    });
-
-    redisClient.on("error", (err: any) => {
-      isRedisHealthy = false;
-      const isUnexpectedClose = err.message && err.message.includes("Socket closed unexpectedly");
-      
-      if (isUnexpectedClose) {
-        console.log("ℹ️ Redis idle socket closed unexpectedly (Upstash timeout). Auto-reconnecting background worker.");
-      } else {
-        console.warn("⚠️ Redis client error:", err.message);
-      }
-    });
-
-    await redisClient.connect();
-
-    // Warm-up ping interval (Every 25 seconds) to prevent Upstash idle connection terminations (usually 60s)
-    setInterval(async () => {
-      if (redisClient && isRedisHealthy) {
-        try {
-          await redisClient.ping();
-        } catch {
-          // Handled gracefully via reconnection listener
-        }
-      }
-    }, 25000);
-
-  } catch (error: any) {
-    console.error("❌ Redis Initial Connection Attempt failed. Caching will auto-activate once connection heals in background. Error:", error.message);
-    isRedisHealthy = false;
-  }
-
-  return redisClient;
+  return null;
 }
 
 // Check database connection states
 export function getDbStatus() {
   return {
     postgres: isPgHealthy ? "CONNECTED" : "FALLBACK_TO_MEMORY",
-    redis: isRedisHealthy ? "CONNECTED" : "DISABLED"
+    redis: "DISABLED"
   };
 }
 
-// Retrieve from caching layer (Redis)
+// Retrieve from caching layer (Redis is disabled, returns null gracefully)
 export async function getFromCache(username: string): Promise<RoastProfile | null> {
-  try {
-    const client = await getRedisClient();
-    if (!client || !isRedisHealthy) return null;
-
-    const key = `roast:${username.toLowerCase().trim()}`;
-    const value = await client.get(key);
-    if (value) {
-      console.log(`🚀 Cache HIT in Redis for user: ${username}`);
-      return JSON.parse(value);
-    }
-  } catch (err: any) {
-    console.warn("⚠️ Redis get operation failed:", err.message);
-  }
   return null;
 }
 
-// Safe set cache item in Redis with 1 Hour TTL
+// Safe set cache item in Redis (Redis is disabled, no-op gracefully)
 export async function setInCache(username: string, profile: RoastProfile): Promise<void> {
-  try {
-    const client = await getRedisClient();
-    if (!client || !isRedisHealthy) return;
-
-    const key = `roast:${username.toLowerCase().trim()}`;
-    const expirationSeconds = 3600; // 1 hour TTL
-    await client.setEx(key, expirationSeconds, JSON.stringify(profile));
-    console.log(`💾 Cached roast in Redis for user: ${username} (TTL: 1h)`);
-  } catch (err: any) {
-    console.warn("⚠️ Redis setEx operation failed:", err.message);
-  }
+  return;
 }
 
 // Retrieve from PostgreSQL Database
