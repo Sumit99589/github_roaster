@@ -77,7 +77,6 @@ export default function SearchHero({ onSearch, isLoading, roastedCount }: Search
             disabled={isLoading || !usernameInput.trim()}
             className="bg-brand-accent hover:opacity-90 active:scale-95 text-white font-sans font-bold text-xs uppercase tracking-widest px-6 md:px-8 py-3 rounded-full flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:scale-100 shrink-0"
           >
-            <Sparkles size={14} />
             <span>EXAMINE</span>
           </button>
         </form>
