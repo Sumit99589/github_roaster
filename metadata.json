@@ -1,0 +1,8 @@
+{
+  "name": "GitHub Roaster",
+  "description": "A web tool for developers that analyzes a GitHub profile and generates a humorous, data-backed roast.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
